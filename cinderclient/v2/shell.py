@@ -21,6 +21,7 @@ import collections
 import copy
 import os
 import warnings
+import time
 
 from oslo_utils import strutils
 import six
@@ -347,6 +348,10 @@ def do_create(cs, args):
            action='store_true',
            default=False,
            help='Remove any snapshots along with volume. Default=False.')
+@utils.arg('--poll',
+           action='store_true',
+           default=False,
+           help='Reports the volume deletion progress until it is complete')
 @utils.arg('volume',
            metavar='<volume>', nargs='+',
            help='Name or ID of volume or volumes to delete.')
@@ -354,16 +359,35 @@ def do_delete(cs, args):
     """Removes one or more volumes."""
     failure_count = 0
     for volume in args.volume:
+        failed_delete=0
         try:
             utils.find_volume(cs, volume).delete(cascade=args.cascade)
             print("Request to delete volume %s has been accepted." % (volume))
         except Exception as e:
+            failed_delete=1
             failure_count += 1
             print("Delete for volume %s failed: %s" % (volume, e))
+
+        if args.poll and failed_delete == 0:
+            _poll_for_status_delete(utils.find_volume, cs, volume, "delete")
+
     if failure_count == len(args.volume):
         raise exceptions.CommandError("Unable to delete any of the specified "
                                       "volumes.")
 
+def _poll_for_status_delete(poll_fn, cs, obj, action, timeout_period=100, poll_period=2):
+    """Tracks the progress of the operation"""
+    loop_count=0
+    while loop_count != timeout_period:
+        try:
+            poll_fn(cs, obj)
+        except Exception as e:
+            print("Volume %s successfully deleted." % obj)
+            break
+        time.sleep(poll_period)
+        loop_count += 1
+        if loop_count == timeout_period:
+            print("Unable to delete volume %s" % obj)
 
 @utils.arg('volume',
            metavar='<volume>', nargs='+',
@@ -645,6 +669,10 @@ def do_snapshot_show(cs, args):
            metavar='<key=value>',
            default=None,
            help='Snapshot metadata key and value pairs. Default=None.')
+@utils.arg('--poll',
+           help='Displays progress of snapshot creation',
+           default=False,
+           action="store_true")
 def do_snapshot_create(cs, args):
     """Creates a snapshot."""
     if args.display_name is not None:
@@ -663,7 +691,14 @@ def do_snapshot_create(cs, args):
                                           args.name,
                                           args.description,
                                           metadata=snapshot_metadata)
-    shell_utils.print_volume_snapshot(snapshot)
+    info=dict()
+    info.update(snapshot._info)
+
+    if args.poll:
+        shell_utils._poll_for_status(cs.volume_snapshots.get, snapshot.id, info, 'creating', ['available'])
+
+    utils.print_dict(info)
+    #shell_utils.print_volume_snapshot(snapshot)
 
 
 @utils.arg('snapshot',
@@ -674,16 +709,25 @@ def do_snapshot_create(cs, args):
            help='Allows deleting snapshot of a volume '
            'when its status is other than "available" or "error". '
            'Default=False.')
+@utils.arg('--poll',
+           action="store_true",
+           help='Shows progress of volume snapshot deletion',
+           default=False)
 def do_snapshot_delete(cs, args):
     """Removes one or more snapshots."""
     failure_count = 0
 
     for snapshot in args.snapshot:
+        failed_delete=0
         try:
             shell_utils.find_volume_snapshot(cs, snapshot).delete(args.force)
         except Exception as e:
+            failed_delete=1
             failure_count += 1
             print("Delete for snapshot %s failed: %s" % (snapshot, e))
+        if args.poll and failed_delete == 0:
+            _poll_for_status(shell_utils.find_volume_snapshot, cs, snapshot, "delete")
+
     if failure_count == len(args.snapshot):
         raise exceptions.CommandError("Unable to delete any of the specified "
                                       "snapshots.")
@@ -1145,10 +1189,15 @@ def do_migrate(cs, args):
 @utils.arg('--migration-policy', metavar='<never|on-demand>', required=False,
            choices=['never', 'on-demand'], default='never',
            help='Migration policy during retype of volume.')
+@utils.arg('--poll', default=False, action='store_true',
+           help='Shows progress while retyping volume')
 def do_retype(cs, args):
     """Changes the volume type for a volume."""
     volume = utils.find_volume(cs, args.volume)
-    volume.retype(args.new_type, args.migration_policy)
+    vol=volume.retype(args.new_type, args.migration_policy)
+    print(vol)
+    #if args.poll:
+        #shell_utils._poll_for_status(cs.volumes.get, volume, info, 
 
 
 @utils.arg('volume', metavar='<volume>',

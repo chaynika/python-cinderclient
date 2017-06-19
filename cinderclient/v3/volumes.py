@@ -152,7 +152,8 @@ class VolumeManager(volumes.VolumeManager):
                             {'force': force,
                              'image_name': image_name,
                              'container_format': container_format,
-                             'disk_format': disk_format})
+                             'disk_format': disk_format},
+                            progress=True)
 
     @api_versions.wraps("3.1")
     def upload_to_image(self, volume, force, image_name, container_format,

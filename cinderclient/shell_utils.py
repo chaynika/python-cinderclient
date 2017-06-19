@@ -18,6 +18,7 @@ import sys
 import time
 
 from cinderclient import utils
+from cinderclient import exceptions
 
 _quota_resources = ['volumes', 'snapshots', 'gigabytes',
                     'backups', 'backup_gigabytes',
@@ -150,7 +151,11 @@ def extract_filters(args):
             (key, value) = f.split('=', 1)
             if value.startswith('{') and value.endswith('}'):
                 value = _build_internal_dict(value[1:-1])
-        filters[key] = value
+            filters[key] = value
+        else:
+            print("WARNING: Ignoring the filter %s while showing result." % f)
+            print("Filters should be passed as: \n \
+                  cinder SUBCOMMAND --filters [<key=value> [<key=value> ...]]")
 
     return filters
 
@@ -274,3 +279,33 @@ def print_qos_specs_and_associations_list(q_specs):
 
 def print_associations_list(associations):
     utils.print_list(associations, ['Association_Type', 'Name', 'ID'])
+
+def _poll_for_status(poll_fn, obj_id, info, action, final_ok_states, global_request_id=None, messages=None,
+        poll_period=2, timeout_period=450, show_progress=True,
+        status_field="status"):
+    """Block while an action is being performed"""
+    time_elapsed = 0
+    while True:
+        time.sleep(poll_period)
+        time_elapsed += poll_period
+        obj = poll_fn(obj_id)
+        status = getattr(obj, status_field)
+        info[status_field]=status
+        print("DEBUG: status is", status)
+        if status:
+            status = status.lower()
+
+        if status in final_ok_states:
+            break
+        elif status == "error":
+            utils.print_dict(info)
+            if global_request_id:
+                search_opts = {
+                        'request_id': global_request_id
+                        }
+                message_list=messages.list(search_opts=search_opts)
+                fault_msg = message_list[0].user_message
+                raise exceptions.ResourceInErrorState(obj, fault_msg)
+        elif time_elapsed == timeout_period:
+            utils.print_dict(info)
+            raise exceptions.TimeoutException(obj, action)

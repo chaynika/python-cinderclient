@@ -17,10 +17,12 @@ import ddt
 import fixtures
 import mock
 from requests_mock.contrib import fixture as requests_mock_fixture
+import cinderclient.v3.shell
 
 from cinderclient import client
 from cinderclient import exceptions
 from cinderclient import shell
+from cinderclient import base
 from cinderclient.v3 import volumes
 from cinderclient.tests.unit import utils
 from cinderclient.tests.unit.v3 import fakes
@@ -55,7 +57,6 @@ class ShellTest(utils.TestCase):
         self.requests.register_uri(
             'GET', keystone_client.BASE_URL,
             text=keystone_client.keystone_request_callback)
-
         self.cs = mock.Mock()
 
     def run_command(self, cmd):
@@ -703,3 +704,67 @@ class ShellTest(utils.TestCase):
             command += ' --withreplication %s' % replication
         self.run_command(command)
         self.assert_called('GET', '/os-services')
+
+    @mock.patch('cinderclient.v3.shell._poll_for_status')
+    def test_create_with_poll(self, poll_method):
+        self.run_command('create --poll 1')
+        self.assert_called_anytime('GET', '/volumes/1234')
+        volume = self.shell.cs.volumes.get('1234')
+        info = dict()
+        info.update(volume._info)
+        info.pop('links', None)
+        self.assertEqual(1, poll_method.call_count)
+        poll_method.assert_has_calls([mock.call(self.shell.cs.volumes.get,
+            1234, self.shell.cs.client.global_request_id,
+            self.shell.cs.messages, info, 'creating', ['available'])])
+
+    @mock.patch('cinderclient.v3.shell.time')
+    def test_poll_for_status(self, mock_time):
+        poll_period = 2
+        some_id = "some-id"
+        global_request_id = "req-someid"
+        action = "some"
+        updated_objects = (
+            base.Resource(None, info={"not_default_field": "creating"}),
+            base.Resource(None, info={"not_default_field": "available"}))
+        poll_fn = mock.MagicMock(side_effect=updated_objects)
+        cinderclient.v3.shell._poll_for_status(
+            poll_fn = poll_fn,
+            obj_id = some_id,
+            global_request_id = global_request_id,
+            messages = base.Resource(None, {}),
+            info = {},
+            action = action,
+            status_field = "not_default_field",
+            final_ok_states = ['available'])
+        self.assertEqual([mock.call(poll_period)] * 2,
+                mock_time.sleep.call_args_list)
+        self.assertEqual([mock.call(some_id)] * 2, poll_fn.call_args_list)
+
+    @mock.patch('cinderclient.v3.messages.MessageManager.list')
+    @mock.patch('cinderclient.v3.shell.time')
+    def test_poll_for_status_error(self, mock_time, mock_message_list):
+        poll_period = 2
+        some_id = "some_id"
+        global_request_id = "req-someid"
+        action = "some"
+        updated_objects = (
+            base.Resource(None, info={"not_default_field": "creating"}),
+            base.Resource(None, info={"not_default_field": "error"}))
+        poll_fn = mock.MagicMock(side_effect=updated_objects)
+        msg_object = base.Resource(cinderclient.v3.messages.MessageManager,
+                info = {"user_message": "ERROR!"})
+        mock_message_list.return_value = (msg_object,)
+        self.assertRaises(exceptions.ResourceInErrorState,
+                cinderclient.v3.shell._poll_for_status,
+                poll_fn=poll_fn,
+                obj_id=some_id,
+                global_request_id=global_request_id,
+                messages=cinderclient.v3.messages.MessageManager(api=3.34),
+                info=dict(),
+                action=action,
+                final_ok_states=['available'],
+                status_field="not_default_field")
+        self.assertEqual([mock.call(poll_period)] * 2,
+                mock_time.sleep.call_args_list)
+        self.assertEqual([mock.call(some_id)] * 2, poll_fn.call_args_list)

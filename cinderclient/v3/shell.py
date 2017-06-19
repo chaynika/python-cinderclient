@@ -19,6 +19,8 @@ from __future__ import print_function
 import argparse
 import collections
 import os
+import sys
+import time
 
 from oslo_utils import strutils
 import six
@@ -497,6 +499,11 @@ def do_reset_state(cs, args):
            help=('Allow volume to be attached more than once.'
                  ' Default=False'),
            default=False)
+@utils.arg('--poll',
+           action="store_true",
+           help=('Report the volume creation progress until it completes.'),
+           default=False)
+
 def do_create(cs, args):
     """Creates a volume."""
 
@@ -552,12 +559,48 @@ def do_create(cs, args):
     info = dict()
     volume = cs.volumes.get(volume.id)
     info.update(volume._info)
-
+    
     if 'readonly' in info['metadata']:
         info['readonly'] = info['metadata']['readonly']
 
     info.pop('links', None)
+    if args.poll:
+        shell_utils._poll_for_status(cs.volumes.get, volume.id, info, 'creating', ['available'],
+                global_request_id=cs.client.global_request_id, messages=cs.messages)
+
     utils.print_dict(info)
+
+
+def _poll_for_status(poll_fn, obj_id, info, action, final_ok_states, global_request_id=None, messages=None,
+                     poll_period=2, timeout_period=450, show_progress=True,
+                     status_field="status"):
+    """Block while an action is being performed"""
+    time_elapsed = 0
+    while True:
+        time.sleep(poll_period)
+        time_elapsed += poll_period
+        obj = poll_fn(obj_id)
+        status = getattr(obj, status_field)
+        info[status_field]=status
+
+        print("DEBUG: status is", status)
+        if status:
+            status = status.lower()
+
+        if status in final_ok_states:
+            break
+        elif status == "error":
+            utils.print_dict(info)
+            if global_request_id:
+                search_opts = {
+                    'request_id': global_request_id
+                    }
+                message_list=messages.list(search_opts=search_opts)
+                fault_msg = message_list[0].user_message
+                raise exceptions.ResourceInErrorState(obj, fault_msg)
+        elif time_elapsed == timeout_period:
+            utils.print_dict(info)
+            raise exceptions.TimeoutException(obj, action)
 
 
 @utils.arg('volume',
@@ -802,23 +845,32 @@ def do_quota_update(cs, args):
            help='Prevents image from being deleted. Default=False.',
            default=False,
            start_version='3.1')
+@utils.arg('--poll',
+           action="store_true",
+           help='Report the volume creation progress until it completes.',
+           default=False)
 def do_upload_to_image(cs, args):
     """Uploads volume to Image Service as an image."""
     volume = utils.find_volume(cs, args.volume)
     if cs.api_version >= api_versions.APIVersion("3.1"):
-        shell_utils.print_volume_image(
-            volume.upload_to_image(args.force,
+        #shell_utils.print_volume_image(
+        vol = volume.upload_to_image(args.force,
                                    args.image_name,
                                    args.container_format,
                                    args.disk_format,
                                    args.visibility,
-                                   args.protected))
+                                   args.protected)
     else:
-        shell_utils.print_volume_image(
-            volume.upload_to_image(args.force,
+        #shell_utils.print_volume_image(
+        vol = volume.upload_to_image(args.force,
                                    args.image_name,
                                    args.container_format,
-                                   args.disk_format))
+                                   args.disk_format)
+    info=vol[1]['os-volume_upload_image']
+    if args.poll:
+        shell_utils._poll_for_status(cs.volumes.get, volume.id, info, 'uploading', ['available'])
+
+    shell_utils.print_volume_image(vol)
 
 
 @api_versions.wraps('3.9')
@@ -1225,6 +1277,10 @@ def do_group_snapshot_show(cs, args):
            metavar='<description>',
            default=None,
            help='Group snapshot description. Default=None.')
+@utils.arg('--poll',
+           action="store_true",
+           default=False,
+           help='Report the snapshot creation progress until it completes.')
 def do_group_snapshot_create(cs, args):
     """Creates a group snapshot."""
     group = shell_utils.find_group(cs, args.group)
@@ -1238,6 +1294,9 @@ def do_group_snapshot_create(cs, args):
     info.update(group_snapshot._info)
 
     info.pop('links', None)
+    if args.poll:
+        _poll_for_status(cs.group_snapshots.get, group_snapshot.id, info, 'creating', ['available'],
+                global_request_id=None, messages=None)
     utils.print_dict(info)
 
 

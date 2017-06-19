@@ -130,13 +130,16 @@ class ClientTest(utils.TestCase):
             "code": 202
         }
 
+        request_id = "req-f551871a-4950-4225-9b2c-29a14c8f075e"
         mock_response = utils.TestResponse({
             "status_code": 202,
             "text": six.b(json.dumps(resp)),
+            "headers": {"x-openstack-request-id": request_id},
         })
 
         # 'request' method of Adaptor will return 202 response
         mock_request.return_value = mock_response
+
         session_client = cinderclient.client.SessionClient(session=mock.Mock())
         response, body = session_client.request(mock.sentinel.url,
                                                 'POST', **kwargs)

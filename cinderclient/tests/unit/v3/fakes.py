@@ -77,8 +77,9 @@ class FakeClient(fakes.FakeClient, client.Client):
                                'project_id', 'auth_url',
                                extensions=kwargs.get('extensions'))
         self.api_version = api_version
-        self.client = FakeHTTPClient(api_version=api_version,
-                                     **kwargs)
+        global_id = "req-%s" % uuid.uuid4()
+        self.client = FakeHTTPClient(api_version = api_version,
+                global_request_id=global_id, **kwargs)
 
     def get_volume_api_version_from_endpoint(self):
         return self.client.get_volume_api_version_from_endpoint()
